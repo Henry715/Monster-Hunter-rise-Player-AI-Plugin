@@ -6,7 +6,9 @@ if __name__=="__main__":
 #    import socket
 
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    print("waiting to connect")
     s.connect(("127.0.0.1", 8080))
+    print("connected")
 
     buffer = ""
 
