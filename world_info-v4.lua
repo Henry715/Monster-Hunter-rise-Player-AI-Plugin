@@ -7,7 +7,6 @@ local large_monster = require("MHR_Overlay.Monsters.large_monster");
 local small_monster = require("MHR_Overlay.Monsters.small_monster");
 local env_creature = require("MHR_Overlay.Endemic_Life.env_creature");
 local env_creature_hook = require("MHR_Overlay.Endemic_Life.env_creature_hook");
-local small_monster = require("MHR_Overlay.Monsters.small_monster");
 local monster_hook = require("MHR_Overlay.Monsters.monster_hook");
 local time = require("MHR_Overlay.Game_Handler.time");
 local buffs = require("MHR_Overlay.Buffs.buffs");
@@ -43,8 +42,6 @@ local player_data_type_def = get_player_data_method:get_return_type();
 local stamina_cap_timer_field = player_data_type_def:get_field("_StaminaUpBuffSecondTimer");
 
 local get_UpTimeSecond = sdk.find_type_definition("via.Application"):get_method("get_UpTimeSecond")
-
-
 
 local os = os
 local io = io
@@ -201,11 +198,12 @@ function this.main()
 			local world_state = this.extract_world_state();
 			local json_str = json.dump_string(world_state);
 
-			-- this.print_player_status();
+			this.print_player_status();
 			-- this.print_monster_status();
-			-- this.print_endemic_life_status();
-			-- this.print_wirebug_status();
-			-- this.print_bow_skills_status();
+			this.print_highlighted_monster();
+			this.print_endemic_life_status();
+			this.print_wirebug_status();
+			this.print_bow_skills_status();
 			this.safe_send(json_str)
 			if log_file then
 				log_file:write(json_str .. ",\n");
@@ -328,6 +326,25 @@ function this.print_monster_status()
 	end
 end
 
+function this.print_highlighted_monster()
+	local highlighted = this.extract_highlighted_monster();
+	if highlighted == nil then
+		print("--- Highlighted Monster: NONE ---");
+		return;
+	end
+
+	print("--- Highlighted Monster ---");
+	print("Name: " .. tostring(highlighted.name));
+	print("ID: " .. tostring(highlighted.id));
+	print("HP: " .. string.format("%.0f / %.0f (%.1f%%)", highlighted.health.current, highlighted.health.max, highlighted.health.percentage * 100));
+	if highlighted.dead_or_captured then
+		print("Status: DEAD/CAPTURED");
+	else
+		print("Status: ALIVE");
+	end
+	print("Position: " .. string.format("x=%.2f, y=%.2f, z=%.2f", highlighted.position.x, highlighted.position.y, highlighted.position.z));
+end
+
 function this.print_endemic_life_status()
 	local counts = {
 		wire_bug = 0,
@@ -447,13 +464,15 @@ function this.extract_world_state()
 	local world_state = {
 		timestamp = current_time,
 		game_time = game_time,
+		time = this.extract_time_info(),
 		quest = this.extract_quest_info(),
 		player = this.extract_player_info(),
-		large_monsters = this.extract_large_monsters(),
+		-- large_monsters = this.extract_large_monsters(),
 		-- small_monsters = this.extract_small_monsters(),
 		endemic_life = this.extract_endemic_life_counts(),
-		wirebug = this.extract_wirebug_status(),
-		time = this.extract_time_info()
+		-- wirebug = this.extract_wirebug_status(),
+		
+		highlighted_monster = this.extract_highlighted_monster()
 	};
 
 	return world_state;
@@ -659,8 +678,11 @@ function this.extract_large_monsters()
 		return monster_list;
 	end
 
+	large_monster.update_highlighted_id();
+
 	local enemy_manager = singletons.enemy_manager;
 	local enemy_count = get_boss_enemy_count_method:call(enemy_manager);
+	local monster_index_shift = 0;
 
 	for i = 0, enemy_count - 1 do
 		local enemy = get_boss_enemy_method:call(enemy_manager, i);
@@ -673,12 +695,26 @@ function this.extract_large_monsters()
 			goto continue;
 		end
 
+		local is_highlighted = false;
+		if large_monster.highlighted_id ~= -1
+		and not monster.dead_or_captured
+		and monster.is_disp_icon_mini_map then
+			if i - monster_index_shift == large_monster.highlighted_id then
+				is_highlighted = true;
+			end
+		end
+
+		if monster.dead_or_captured or not monster.is_disp_icon_mini_map then
+			monster_index_shift = monster_index_shift + 1;
+		end
+
 		local monster_data = {
 			name = monster.name,
 			id = monster.id,
 			unique_id = monster.unique_id,
 			is_large = monster.is_large,
 			dead_or_captured = monster.dead_or_captured,
+			is_highlighted = is_highlighted,
 			position = {
 				x = monster.position.x,
 				y = monster.position.y,
@@ -739,6 +775,105 @@ function this.extract_large_monsters()
 	end
 
 	return monster_list;
+end
+
+function this.extract_highlighted_monster()
+	large_monster.update_highlighted_id();
+
+	if large_monster.highlighted_id == -1 then
+		return nil;
+	end
+
+	if singletons.enemy_manager == nil then
+		return nil;
+	end
+
+	local enemy_manager = singletons.enemy_manager;
+	local enemy_count = get_boss_enemy_count_method:call(enemy_manager);
+	local monster_index_shift = 0;
+
+	for i = 0, enemy_count - 1 do
+		local enemy = get_boss_enemy_method:call(enemy_manager, i);
+		if enemy == nil then
+			goto continue;
+		end
+
+		local monster = large_monster.list[enemy];
+		if monster == nil then
+			goto continue;
+		end
+
+		if monster.dead_or_captured or not monster.is_disp_icon_mini_map then
+			monster_index_shift = monster_index_shift + 1;
+			goto continue;
+		end
+
+		if i - monster_index_shift == large_monster.highlighted_id then
+			return {
+				name = monster.name,
+				id = monster.id,
+				unique_id = monster.unique_id,
+				is_large = monster.is_large,
+				dead_or_captured = monster.dead_or_captured,
+				position = {
+					x = monster.position.x,
+					y = monster.position.y,
+					z = monster.position.z
+				},
+				head_position = {
+					x = monster.head_position.x,
+					y = monster.head_position.y,
+					z = monster.head_position.z
+				},
+				health = {
+					current = monster.health,
+					max = monster.max_health,
+					percentage = monster.health_percentage,
+					missing = monster.missing_health
+				},
+				capture = {
+					health = monster.capture_health,
+					percentage = monster.capture_percentage,
+					is_capturable = monster.is_capturable
+				},
+				stamina = {
+					current = monster.stamina,
+					max = monster.max_stamina,
+					percentage = monster.stamina_percentage,
+					is_tired = monster.is_tired,
+					tired_timer = monster.tired_timer,
+					tired_duration = monster.tired_duration
+				},
+				rage = {
+					point = monster.rage_point,
+					limit = monster.rage_limit,
+					percentage = monster.rage_percentage,
+					is_in_rage = monster.is_in_rage,
+					timer = monster.rage_timer,
+					duration = monster.rage_duration
+				},
+				stealth = {
+					is_stealth = monster.is_stealth,
+					can_go_stealth = monster.can_go_stealth
+				},
+				size = {
+					value = monster.size,
+					small_border = monster.small_border,
+					big_border = monster.big_border,
+					king_border = monster.king_border,
+					crown = monster.crown
+				},
+				rider_id = monster.rider_id,
+				is_anomaly = monster.is_anomaly,
+				parts = this.extract_body_parts(monster),
+				ailments = this.extract_monster_ailments(monster)
+			};
+		end
+
+		::continue::
+	end
+
+	return nil;
 end
 
 function this.extract_body_parts(monster)
